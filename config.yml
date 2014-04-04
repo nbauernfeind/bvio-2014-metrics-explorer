@@ -1,7 +1,0 @@
-http:
-  port: 6333
-  adminPort: 6334
-
-assets:
-  overrides:
-    /app: web/src/main/resources/app/

@@ -9,8 +9,13 @@ import com.nefariouszhen.hackathon.index.IndexModule
 import com.yammer.dropwizard.config.{Environment, Bootstrap, Configuration}
 import com.yammer.dropwizard.ScalaService
 import com.yammer.dropwizard.bundles.ScalaBundle
+import com.nefariouszhen.hackathon.data.{DatadogCredentials, DataModule}
+import com.nefariouszhen.hackathon.util.DropwizardPublicModule
 
 class MetricsExplorerConfiguration extends Configuration with AssetsBundleConfiguration {
+  @JsonProperty
+  var datadog = DatadogCredentials("user", "pass")
+
   @JsonProperty
   var assets = new AssetsConfiguration()
 
@@ -37,8 +42,20 @@ object MetricsExplorerService extends ScalaService[MetricsExplorerConfiguration]
   }
 
   def run(configuration: MetricsExplorerConfiguration, environment: Environment) {
-    val modules = List(new IndexModule())
+    val modules = List(
+      new IndexModule(),
+      new DataModule(configuration.datadog),
+      new DropwizardPublicModule {
+        def doConfigure(): Unit = {
+          bind[MetricsExplorerConfiguration].toInstance(configuration)
+          bind[Environment].toInstance(environment)
+        }
+        def install(env: Environment): Unit = {}
+      }
+    )
+
     Guice.createInjector(modules: _*)
+
     modules.foreach(_.install(environment))
   }
 }
