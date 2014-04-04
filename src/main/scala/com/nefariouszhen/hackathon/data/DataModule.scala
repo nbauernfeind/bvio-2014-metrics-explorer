@@ -15,12 +15,14 @@ import com.fasterxml.jackson.annotation.JsonProperty
 
 case class DatadogCredentials(username: String, password: String)
 
-case class ListMetricsResult(metrics: Iterable[String])
+case class ListMetricsResult(metrics: Array[String])
 case class MetricsContextResult(timing: Double,
-                                @JsonProperty("contexts_by_metric") contextMap: Map[String, Iterable[Iterable[String]]])
+                                @JsonProperty("contexts_by_metric") contextMap: Map[String, Array[Array[String]]])
 
-class DatadogClient @Inject() (creds: DatadogCredentials, client: Client) {
+class DatadogClient @Inject() (creds: DatadogCredentials, client: Client, clientFilter: CookieClientFilter) {
   def login(): Unit = {
+    clientFilter.clearCookies()
+
     // TODO, detect the difference between a login (via 302) and an invalid login.
     try {
       val formData = new MultivaluedMapImpl()
@@ -44,20 +46,10 @@ class DatadogClient @Inject() (creds: DatadogCredentials, client: Client) {
   def listContextForMetrics(metrics: Iterable[String]): MetricsContextResult = {
     var builder = client.resource("https://app.datadoghq.com/metric/contexts_for_metrics")
 
-    for (metric <- metrics) {
-      builder = builder.queryParam("metrics[]", metric)
-    }
-
-    builder.queryParam("window", "86400")
-      .accept(MediaType.APPLICATION_JSON)
-      .get(classOf[MetricsContextResult])
-  }
-
-  def listContextForMetricsPost(metrics: Iterable[String]): MetricsContextResult = {
-    var builder = client.resource("https://app.datadoghq.com/metric/contexts_for_metrics")
-
     val formData = new MultivaluedMapImpl()
-    formData.add("metrics[]", metrics)
+    for (metric <- metrics) {
+      formData.add("metrics[]", metric)
+    }
 
     builder.queryParam("window", "86400")
       .queryParams(formData)
@@ -70,6 +62,8 @@ class DataModule(creds: DatadogCredentials) extends DropwizardPrivateModule {
   def doConfigure(): Unit = {
     bind[DatadogClient].asEagerSingleton()
     bind[DatadogCredentials].toInstance(creds)
+    bind[ClientFilter].to[CookieClientFilter]
+    bind[CookieClientFilter].asEagerSingleton()
 
     expose[DatadogClient]
   }
@@ -80,36 +74,40 @@ class DataModule(creds: DatadogCredentials) extends DropwizardPrivateModule {
 
   @Provides
   @Singleton
-  def createJerseyClient(env: Environment): Client = {
+  def createJerseyClient(env: Environment, clientFilter: ClientFilter): Client = {
     val jerseyPool = Executors.newCachedThreadPool()
     val jerseyCfg = new JerseyClientConfiguration
-    jerseyCfg.setTimeout(Duration.seconds(5))
+    jerseyCfg.setTimeout(Duration.seconds(60))
 
     val client = new JerseyClientBuilder()
       .using(jerseyCfg)
       .using(jerseyPool, env.getObjectMapperFactory.build())
       .build()
 
-    client.addFilter(new ClientFilter() {
-      private val cookies = new util.ArrayList[AnyRef]()
-
-      @Override
-      def handle(request: ClientRequest): ClientResponse = {
-        if (cookies != null) {
-          request.getHeaders.put("Cookie", cookies)
-        }
-
-        val response = getNext.handle(request)
-        if (response.getCookies != null) {
-          cookies.addAll(response.getCookies)
-        }
-
-        response
-      }
-    })
+    client.addFilter(clientFilter)
 
     client.setFollowRedirects(true)
 
     client
+  }
+}
+
+class CookieClientFilter extends ClientFilter {
+  private val cookies = new util.ArrayList[AnyRef]()
+
+  def clearCookies(): Unit = cookies.clear()
+
+  @Override
+  def handle(request: ClientRequest): ClientResponse = {
+    if (cookies != null) {
+      request.getHeaders.put("Cookie", cookies)
+    }
+
+    val response = getNext.handle(request)
+    if (response.getCookies != null) {
+      cookies.addAll(response.getCookies)
+    }
+
+    response
   }
 }
